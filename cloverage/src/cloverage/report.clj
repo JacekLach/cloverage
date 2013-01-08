@@ -98,10 +98,10 @@
 
 ;; Java 7 has a much nicer API, but this supports Java 6.
 (defn relative-path [file base-dir]
-  ^{:doc "Return the path to file relative to base-dir. file is a java.io.File."}
+  ^{:doc "Return the path to file relative to base-dir. file is a java.io.File. base-dir must be a parent directory of file."}
   (let [path (.getAbsolutePath file)
         base (.getAbsolutePath (java.io.File. base-dir))]
-    (drop (count base) path)))
+    (apply str (seq (drop (count base) path)))))
 
 (defn html-report [out-dir forms]
   (copy (resource-reader "coverage.css") (File. out-dir "coverage.css"))
