@@ -5,6 +5,12 @@ Simple clojure coverage tool. Currently requires clojure 1.4.
 
 [![Build Status](https://secure.travis-ci.org/lshift/cloverage.png?branch=master)](http://travis-ci.org/lshift/cloverage)
 
+See
+[example/index.html](https://github.com/lshift/cloverage/blob/master/example/index.html)
+and
+[example/cloverage/sample.clj.html](https://github.com/lshift/cloverage/blob/master/cloverage/sample.clj.html)
+for example output.
+
 ## Installation
 
 Simply add [lein-cloverage "1.0.2"] to :plugins in your .lein/profiles.clj

@@ -161,7 +161,6 @@
 
 (deftest test-main
   (cloverage.coverage/-main
-   "-o" "out"
    "--text" "--html" "--raw"
    "-x" "cloverage.sample"
    "cloverage.sample"))
