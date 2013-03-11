@@ -99,8 +99,8 @@
        ["-h" "--help" "Show help." :default false :flag true]))
 
 (defn mark-loaded [namespace]
-  (binding [*ns* (find-ns 'clojure.core)]
-    (eval `(dosync (alter clojure.core/*loaded-libs* conj '~namespace)))))
+  (dosync
+    (alter @#'clojure.core/*loaded-libs* conj namespace)))
 
 (defn find-nses [patterns]
   (for [ns (map name (blt/namespaces-on-classpath))
