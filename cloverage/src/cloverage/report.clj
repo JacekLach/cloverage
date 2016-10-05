@@ -1,11 +1,30 @@
 (ns cloverage.report
-  (:import [java.io File])
+  (:import [java.io File]
+	   [java.security MessageDigest]
+	   [java.math BigInteger])
   (:use [clojure.java.io :only [writer reader copy]]
         [cloverage.source :only [resource-reader]])
   (:require clojure.pprint
             [clojure.string :as cs]
             [clojure.data.xml :as xml]
             [cheshire.core :as json]))
+
+(def html-escapes
+  { \space "&nbsp;"
+    \& "&amp;"
+    \< "&lt;"
+    \> "&gt;"
+    \" "&quot;"
+    \' "&#x27;"
+    \/ "&#x2F;"})
+
+(defn md5 [s]
+  (let [algorithm (MessageDigest/getInstance "MD5")
+	size (* 2 (.getDigestLength algorithm))
+	raw (.digest algorithm (.getBytes s))
+	sig (.toString (BigInteger. 1 raw) 16)
+	padding (apply str (repeat (- size (count sig)) "0"))]
+    (str padding sig)))
 
 ;; borrowed from duck-streams
 (defmacro with-out-writer
@@ -41,11 +60,16 @@
 (defn line-stats [forms]
   (for [[line line-forms] (group-by-line forms)]
     (let [total (count (filter :tracked line-forms))
-          hit   (count (filter :covered line-forms))]
+          hit   (count (filter :covered line-forms))
+          times-hit (if (zero? hit)
+                      hit
+                      (apply max (filter number?
+                                         (map :hits line-forms))))]
       {:line     line
        :text     (:text (first line-forms))
        :total    total
        :hit      hit
+       :times-hit times-hit
        :blank?   (empty? (:text (first line-forms)))
        :covered? (and (> total 0) (= total hit))
        :partial? (and (> hit 0) (< hit total))
@@ -133,8 +157,28 @@
           xml/sexp-as-element (xml/emit wr)))
     nil))
 
-(defn- html-spaces [s]
-  (.replace s " " "&nbsp;"))
+(defn- write-lcov-report
+  "Write out lcov report to *out*"
+  [forms]
+  (doseq [[rel-file file-forms] (group-by :file forms)]
+        (let [lines (line-stats file-forms)
+              instrumented (filter :instrumented? lines)]
+          (println "TN:")
+          (printf "SF:%s%n" rel-file)
+          (doseq [line instrumented]
+            (printf "DA:%d,%d%n" (:line line) (:hit line)))
+          (printf "LF:%d%n" (count instrumented))
+          (printf "LH:%d%n" (count (filter (fn [line] (> (:hit line) 0)) lines)))
+          (println "end_of_record"))))
+
+(defn lcov-report
+  "Write LCOV report to '${out-dir}/lcov.info'."
+  [out-dir forms]
+  (let [file (File. out-dir "lcov.info")]
+    (.mkdirs (.getParentFile file))
+    (with-out-writer file (write-lcov-report forms))
+    nil))
+
 
 ;; Java 7 has a much nicer API, but this supports Java 6.
 (defn relative-path [target-dir base-dir]
@@ -173,6 +217,7 @@
       (with-out-writer file
         (println "<html>")
         (println " <head>")
+        (println "   <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">")
         (printf "  <link rel=\"stylesheet\" href=\"%scoverage.css\"/>" rootpath)
         (println "  <title>" rel-file "</title>")
         (println " </head>")
@@ -189,7 +234,7 @@
                 </span><br/>%n"
                 cls (:hit line) (:total line)
                 (:line line)
-                (html-spaces (:text line " ")))))
+                (cs/escape (:text line " ") html-escapes))))
         (println " </body>")
         (println "</html>")))))
 
@@ -209,12 +254,25 @@
 (defn- td-num [content]
   (format "<td class=\"with-number\">%s</td>" content))
 
+(defn total-stats [forms]
+  (let [all-file-stats (file-stats forms)
+        total      #(reduce + (map % all-file-stats))
+        covered    (total :covered-lines)
+        partial    (total :partial-lines)
+        lines      (total :instrd-lines)
+        cov-forms  (total :covered-forms)
+        forms      (total :forms)]
+    {:percent-lines-covered (if (= lines 0) 0. (* (/ (+ covered partial) lines) 100.0))
+     :percent-forms-covered (if (= forms 0) 0. (* (/ cov-forms forms) 100.0))}))
+
 (defn html-summary [out-dir forms]
-  (let [index (File. out-dir "index.html")]
+  (let [index (File. out-dir "index.html")
+        totalled-stats (total-stats forms)]
     (.mkdirs (File. out-dir))
     (with-out-writer index
       (println "<html>")
       (println " <head>")
+      (println "   <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">")
       (println "  <link rel=\"stylesheet\" href=\"./coverage.css\"/>")
       (println "  <title>Coverage Summary</title>")
       (println " </head>")
@@ -228,7 +286,7 @@
       (println (td-num "Lines %"))
       (println (apply str (map td-num ["Total" "Blank" "Instrumented"])))
       (println "   </tr></thead>")
-      (doseq [file-stat (file-stats forms)]
+      (doseq [file-stat (sort-by :lib (file-stats forms))]
         (let [filepath  (:file file-stat)
               libname   (:lib  file-stat)
 
@@ -241,8 +299,7 @@
               covered   (:covered-lines file-stat)
               partial   (:partial-lines file-stat)
               blank     (:blank-lines   file-stat)
-              missed    (- instrd partial covered)
-              ]
+              missed    (- instrd partial covered)]
           (println "<tr>")
           (printf  " <td><a href=\"%s.html\">%s</a></td>" filepath libname)
           (println (td-bar forms [:covered cov-forms]
@@ -257,7 +314,13 @@
             (apply str (map td-num [lines blank instrd])))
           (println "</tr>")
           ))
-      (println "  </ul>")
+      (println "<tr><td>Totals:</td>")
+      (println (td-bar nil))
+      (println (td-num (format "%.2f %%" (:percent-forms-covered totalled-stats))))
+      (println (td-bar nil))
+      (println (td-num (format "%.2f %%" (:percent-lines-covered totalled-stats))))
+      (println "   </tr>")
+      (println "  </table>")
       (println " </body>")
       (println "</html>"))
     (format "HTML: file://%s" (.getAbsolutePath index))))
@@ -284,16 +347,11 @@
                     (fn [[file file-forms]]
                       (let [lines (line-stats file-forms)]
                         {:name file
-                         :source (cs/join "\n" (map :text lines))
-                         ;; 2: covered
-                         ;; 1: partially covered
+			 :source_digest (md5 (cs/join "\n" (map :text lines)))
+			 ;; >0: covered (number of times hit)
                          ;; 0: not covered
-                         :coverage (map (fn [line]
-                                          (cond (:blank?   line) nil
-                                                (:covered? line) 2
-                                                (:partial? line) 1
-                                                (:instrumented? line) 0
-                                                :else nil)) lines)}))
+			 ;; null: blank
+			 :coverage (map #(if (:instrumented? %) (:hit %)) lines)}))
                       (filter (fn [[file _]] file)
                               (group-by :file forms)))]
           (with-out-writer (File. out-dir "coveralls.json")
@@ -301,8 +359,67 @@
                                           :service_name service
                                           :source_files covdata}))))))
 
+
+(defn codecov-report [out-dir forms]
+  (println "codecov start")
+  (let [data (filter (fn [[file _]] file) (group-by :file forms))
+        covdata
+        (into {}
+              (map
+               (fn [[file file-forms]]
+                 ;; https://codecov.io/api#post-json-report
+                 ;; > 0: covered (number of times hit)
+                 ;; true: partially covered
+                 ;; 0: not covered
+                 ;; null: skipped/ignored/empty
+                 ;; the first item in the list must be a null
+                 (vector file
+                         (cons nil
+                               (mapv (fn [line]
+                                       (cond (:blank?   line) nil
+                                             (:covered? line) (:times-hit line)
+                                             (:partial? line) true
+                                             (:instrumented? line) 0
+                                             :else nil)) (line-stats file-forms)))))
+               data))]
+    (with-out-writer (File. out-dir "codecov.json")
+      (print (json/generate-string {:coverage covdata})))))
+
 (defn raw-report [out-dir stats covered]
   (with-out-writer (File. (File. out-dir) "raw-data.clj")
     (clojure.pprint/pprint (zipmap (range) covered)))
   (with-out-writer (File. (File. out-dir) "raw-stats.clj")
                    (clojure.pprint/pprint stats)))
+
+(defn summary
+  "Create a text summary for output on the command line"
+  [forms]
+  (let [totalled-stats (total-stats forms)
+        namespaces (map (fn [file-stat]
+                          (let [libname   (:lib  file-stat)
+
+                                forms     (:forms file-stat)
+                                cov-forms (:covered-forms file-stat)
+                                instrd    (:instrd-lines  file-stat)
+                                covered   (:covered-lines file-stat)
+                                partial   (:partial-lines file-stat)]
+                            {:name libname
+                             :forms_percent (format "%.2f %%" (/ (* 100.0 cov-forms) forms))
+                             :lines_percent (format "%.2f %%" (/ (* 100.0 (+ covered partial)) instrd))
+                             :forms (/ (* 100.0 cov-forms) forms)
+                             :lines (/ (* 100.0 (+ covered partial)) instrd)}))
+                        (sort-by :lib (file-stats forms)))
+        bad-namespaces (filter #(or (not= 100.0 (:forms %)) (not= 100.0 (:lines %))) namespaces)]
+
+    (str
+      (when (< 0 (count bad-namespaces))
+        (str
+          (with-out-str (clojure.pprint/print-table [:name :forms_percent :lines_percent] bad-namespaces))
+          "Files with 100% coverage: "
+          (- (count namespaces) (count bad-namespaces))
+          "\n"))
+      "\nForms covered: "
+      (format "%.2f %%" (:percent-forms-covered totalled-stats))
+      "\nLines covered: "
+      (format "%.2f %%" (:percent-lines-covered totalled-stats))
+      "\n")))

@@ -1,13 +1,13 @@
 cloverage
 =========
 
-Simple clojure coverage tool. Currently requires clojure 1.4.
+Simple clojure coverage tool.
 
-[![Build Status](https://secure.travis-ci.org/lshift/cloverage.png?branch=master)](http://travis-ci.org/lshift/cloverage)
+Travis: [![Build Status](https://secure.travis-ci.org/lshift/cloverage.png?branch=master)](http://travis-ci.org/lshift/cloverage) CircleCi: [![CircleCI](https://circleci.com/gh/lshift/cloverage.svg?style=svg)](https://circleci.com/gh/lshift/cloverage)
 
 ## Installation
 
-Simply add [lein-cloverage "1.0.2"] to :plugins in your .lein/profiles.clj
+Add [![Clojars Project](http://clojars.org/lein-cloverage/latest-version.svg)](http://clojars.org/lein-cloverage) to :plugins in your .lein/profiles.clj
 
 ## Testing frameworks support
 
@@ -20,6 +20,11 @@ by wrapping facts in `deftest` declarations.
 Run `lein cloverage` in your project. See cloverage/coverage.clj for more
 options.
 
+To specify the version of cloverage manually, set the `CLOVERAGE_VERSION`
+to desired value, for example `CLOVERAGE_VERSION=1.0.4-SNAPSHOT lein cloverage`
+
+By default, the plugin will use the latest release version of cloverage.
+
 ### mvn
 
 There is no maven plugin right now. A workaround is to import this library in the
@@ -30,6 +35,8 @@ Where *args-to-coverage* will usually be something like "-n 'ns.regex.*' -t 'tex
 
 
 ## Troubleshooting
+
+### IllegalArgumentException No matching field found: foo for class user.Bar
 
     IllegalArgumentException No matching field found: foo for class user.Bar  clojure.lang.Reflector.getInstanceField (Reflector.java:271)
 
@@ -48,14 +55,54 @@ IllegalArgumentException No matching field found: foo for class user.Bar  clojur
 
 Since cloverage *will* wrap the -foo symbol to track whether it's accessed, you will get this error. Upgrade to clojure 1.6.
 
+### Coverage reports 0% coverage after running tests
 
+This happens if there is a namespace in your project that requires itself, for example:
+
+```clojure
+(ns foo.bar
+  (:require [foo.bar :as bar]))
+```
+
+Remove the self-reference and the test coverage report should report correctly again.
 
 ## Changelog
-1.0.4-SNAPSHOT:
+
+1.0.7 (WIP)
+- Features
+  - Add codecov.io support with the `--codecov` flag (#78)
+  - Add lcov (e.g. coverlay) support with the `--lcov` flag (#114)
+- Improvements
+  - Coverage fn (internal hot loop) optimization (#90)
+  - Dependency upgrades, including running tests on Oracle JDK 8 (#105)
+- Bugfixes
+  - Fix Unicode (UTF-8) support for HTML output (#100)
+  - Fix handling of multibyte characters (#108)
+  - Fix HTML entity encoding bug (#55)
+  - Coveralls report: fix source digest, line hit numbers (#96)
+
+1.0.6
+- Features
+  - Option to exclude namespaces (#57/#73)
+  - Improved records fixes for Compojure (#66/#69)
+  - Option to specify a path to src/test namespaces (#70)
+  - Automatic push out of snapshot releases (#65)
+  - Handle records correctly (#59)
+  - Text summary of results (#50)
+- Bugfixes
+  - Correct test namespaces regex usage (#67)
+  - Cope with zero-namespace situations correctly (#62)
+
+1.0.5:
+- Bugfixes:
+ - Work around AOT-ed inline functions not being wrappable (http://dev.clojure.org/jira/browse/CLJ-1330)
+
+1.0.4:
 - Features:
  - Minimal EMMA XML output format support.
  - [Coveralls](https://coveralls.io) output format.
  - Cloverage now exits with non-zero exit code when your tests fail
+ - Total % coverage summary in index.html
 - Bugfixes:
  - Better instrumentation logic is no longer confused by macro/symbol shadowing
  - Support for (:require [(namespace.prefix (suffix :as rename))]) ns forms
@@ -72,6 +119,7 @@ Distributed under the Eclipse Public License, the same as Clojure.
 
 ### Contributors
 
+* 2015 LShift, Tom Parker
 * 2012 LShift, Jacek Lach, Alexander Schmolck, Frank Shearar
 * 2010 Michael Delaurentis
 

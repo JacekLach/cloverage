@@ -6,6 +6,7 @@
   (:require [clojure.set :as set]
             [clojure.test :as test]
             [clojure.tools.logging :as log]
+            [clojure.tools.reader :as r]
             [riddley.walk :refer [macroexpand-all]]))
 
 (defn iobj? [form]
@@ -21,9 +22,12 @@
     (let [line (or (:line (meta form)) start)
           recs (if (and (seq? form) (seq form))
                  ;; (seq '()) gives nil which makes us NPE. Bad.
-                 (seq (map (partial propagate-line-numbers line) form))
+                 (with-meta
+                   (seq (map (partial propagate-line-numbers line) form))
+                   (meta form))
                  form)
-          ret  (if line
+          ret  (if (and line
+                        (not (number? (:line (meta form)))))
                  (vary-meta recs assoc :line line)
                  recs)]
       ret)
@@ -93,7 +97,11 @@
     `#{defmulti}    :defmulti ; special case defmulti to avoid boilerplate
     `#{defprotocol} :atomic   ; no code in protocols
     `#{defrecord}   :record
+    `#{ns}          :atomic
 
+    ;; http://dev.clojure.org/jira/browse/CLJ-1330 means AOT-compiled definlines
+    ;; are broken when used indirectly. Work around - do not wrap the definline
+    `#{booleans bytes chars shorts floats ints doubles longs} :inlined
     atomic-special?   :atomic
     ;; XXX: we used to not do anything with unknown specials, now we wrap them
     ;; in a macro, then macroexpand back to original form. Methinks it's ok.
@@ -203,9 +211,17 @@
   (log/warn (str "Unknown special form " (seq form)))
   form)
 
+;; Don't wrap definline functions - see http://dev.clojure.org/jira/browse/CLJ-1330
+(defmethod do-wrap :inlined [f line [inline-fn & body] _]
+  `(~inline-fn ~@(map (wrapper f line) body)))
+
 ;; Don't descend into atomic forms, but do wrap them
 (defmethod do-wrap :atomic [f line form _]
   (f line form))
+
+;; Only here for Clojure 1.4 compatibility, 1.6 has record?
+(defn- map-record? [x]
+  (instance? clojure.lang.IRecord x))
 
 ;; For a collection, just recur on its elements.
 (defmethod do-wrap :coll [f line form _]
@@ -213,6 +229,10 @@
   (let [wrappee (map (wrapper f line) form)
         wrapped (cond (vector? form) `[~@wrappee]
                       (set? form) `#{~@wrappee}
+                      (map-record? form) (merge form
+                                           (zipmap
+                                             (doall (map (wrapper f line) (keys form)))
+                                             (doall (map (wrapper f line) (vals form)))))
                       (map? form) (zipmap
                                    (doall (map (wrapper f line) (keys form)))
                                    (doall (map (wrapper f line) (vals form))))
@@ -379,12 +399,16 @@
   "Instruments and evaluates a list of forms."
   ([f-var lib]
     (let [filename (resource-path lib)]
-      (with-open [src (form-reader lib)]
+      (let [src (form-reader lib)]
         (loop [instrumented-forms nil]
           (if-let [form (binding [*read-eval* false]
-                          (read src false nil true))]
+                          (r/read {:eof nil
+                                   :features #{:clj}
+                                   :read-cond :allow}
+                                  src))]
             (let [line-hint (:line (meta form))
-                  form      (if (iobj? form)
+                  form      (if (and (iobj? form)
+                                     (nil? (:file (meta form))))
                               (vary-meta form assoc :file filename)
                               form)
                   wrapped   (try
